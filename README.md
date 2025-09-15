@@ -467,7 +467,7 @@ sudo journalctl -u deviceagent -f
 ---
 
 ## License
-This project is licensed under the MIT License.
+This project is licensed under the GPL 2.0 License.
 
 ## Version
 Current Version: 2.0.0 (September 2025)
@@ -476,3 +476,4 @@ Current Version: 2.0.0 (September 2025)
 - Timezone support
 
 - Security improvements
+
