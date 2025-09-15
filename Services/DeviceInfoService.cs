@@ -21,25 +21,34 @@ public interface IDeviceInfoService
 public class DeviceInfoService : IDeviceInfoService
 {
     private readonly ILogger<DeviceInfoService> _logger;
+    private readonly ITimeZoneService _timeZoneService;
 
-    public DeviceInfoService(ILogger<DeviceInfoService> logger)
+    public DeviceInfoService(ILogger<DeviceInfoService> logger, ITimeZoneService timeZoneService)
     {
         _logger = logger;
+        _timeZoneService = timeZoneService;
     }
 
     public async Task<DeviceInfo> GetCurrentDeviceInfoAsync()
     {
         try
         {
+            // Use configured timezone for logical time, but store as UTC in database
+            var localTime = _timeZoneService.GetCurrentTime();
+            var utcTime = _timeZoneService.ConvertLocalToUtc(localTime);
+            
             var deviceInfo = new DeviceInfo
             {
                 hostname = Environment.MachineName,
-                updated_at = DateTime.UtcNow,
-                last_discovered = DateTime.UtcNow,
+                updated_at = utcTime,
+                last_discovered = utcTime,
                 discovery_method = "Agent",
                 device_status = "Active",
-                device_type = "Computer"
+                device_type = "PC"
             };
+
+            _logger.LogDebug("Device info timestamps - Local: {LocalTime}, UTC: {UtcTime}, TimeZone: {TimeZone}", 
+                localTime, utcTime, _timeZoneService.GetTimeZoneId());
 
             // Get domain information
             deviceInfo.domain_name = Environment.UserDomainName;
@@ -102,7 +111,7 @@ public class DeviceInfoService : IDeviceInfoService
             // Get Asset Tag from registry
             try
             {
-                using var key = Registry.LocalMachine.OpenSubKey(@"{INSERT REGISTRY PATH HERE}");
+                using var key = Registry.LocalMachine.OpenSubKey(@"Software\VWG\Inventory");
                 if (key != null)
                 {
                     deviceInfo.asset_tag = key.GetValue("AssetTag")?.ToString();
@@ -270,8 +279,8 @@ public class DeviceInfoService : IDeviceInfoService
         try
         {
             // Get manufacturer and model from DMI
-            deviceInfo.Manufacturer = await ReadFileContentAsync("/sys/class/dmi/id/sys_vendor");
-            deviceInfo.Model = await ReadFileContentAsync("/sys/class/dmi/id/product_name");
+            deviceInfo.manufacturer = await ReadFileContentAsync("/sys/class/dmi/id/sys_vendor");
+            deviceInfo.model = await ReadFileContentAsync("/sys/class/dmi/id/product_name");
             
             // Get total memory from /proc/meminfo
             var meminfo = await File.ReadAllTextAsync("/proc/meminfo");
@@ -279,14 +288,14 @@ public class DeviceInfoService : IDeviceInfoService
             if (memTotalMatch.Success)
             {
                 var memKB = long.Parse(memTotalMatch.Groups[1].Value);
-                deviceInfo.TotalRamGb = Math.Round((decimal)memKB / (1024 * 1024), 2);
+                deviceInfo.total_ram_gb = (int)Math.Round((decimal)memKB / (1024 * 1024));
             }
             
             // Domain/workgroup info is less relevant on Linux, but we can check if it's joined to AD
-            deviceInfo.IsDomainJoined = File.Exists("/etc/krb5.conf") && File.Exists("/etc/samba/smb.conf");
-            if (deviceInfo.IsDomainJoined == true)
+            deviceInfo.is_domain_joined = File.Exists("/etc/krb5.conf") && File.Exists("/etc/samba/smb.conf");
+            if (deviceInfo.is_domain_joined == true)
             {
-                deviceInfo.DomainName = await GetLinuxDomainAsync();
+                deviceInfo.domain_name = await GetLinuxDomainAsync();
             }
         }
         catch (Exception ex)
@@ -311,7 +320,7 @@ public class DeviceInfoService : IDeviceInfoService
                 var logicalCores = coreCountMatch.Count;
                 var physicalCores = physicalIdMatches.Cast<Match>().Select(m => m.Groups[1].Value).Distinct().Count();
                 
-                deviceInfo.CpuInfo = $"{cpuModel} ({physicalCores} cores, {logicalCores} threads)";
+                deviceInfo.cpu_info = $"{cpuModel} ({physicalCores} cores, {logicalCores} threads)";
             }
         }
         catch (Exception ex)
@@ -334,14 +343,14 @@ public class DeviceInfoService : IDeviceInfoService
                 var speedMatch = lines.FirstOrDefault(l => l.Contains("Speed:") && !l.Contains("Configured"));
                 var manufacturerMatch = lines.FirstOrDefault(l => l.Contains("Manufacturer:"));
                 
-                if (typeMatch != null) deviceInfo.RamType = typeMatch.Split(':')[1].Trim();
-                if (speedMatch != null) deviceInfo.RamSpeed = speedMatch.Split(':')[1].Trim();
-                if (manufacturerMatch != null) deviceInfo.RamManufacturer = manufacturerMatch.Split(':')[1].Trim();
+                if (typeMatch != null) deviceInfo.ram_type = typeMatch.Split(':')[1].Trim();
+                if (speedMatch != null) deviceInfo.ram_speed = speedMatch.Split(':')[1].Trim();
+                if (manufacturerMatch != null) deviceInfo.ram_manufacturer = manufacturerMatch.Split(':')[1].Trim();
             }
             catch
             {
                 // dmidecode might not be available or require root
-                deviceInfo.RamType = "Unknown";
+                deviceInfo.ram_type = "Unknown";
                 _logger.LogInformation("dmidecode not available for detailed memory info");
             }
         }
@@ -370,31 +379,31 @@ public class DeviceInfoService : IDeviceInfoService
                     
                     if (i == 0)
                     {
-                        deviceInfo.StorageInfo = $"{size} {model}";
-                        deviceInfo.StorageType = "SATA"; // Default assumption
-                        deviceInfo.StorageModel = model;
+                        deviceInfo.storage_info = $"{size} {model}";
+                        deviceInfo.storage_type = "SATA"; // Default assumption
+                        deviceInfo.storage_model = model;
                     }
                     else
                     {
                         switch (i)
                         {
                             case 1:
-                                deviceInfo.Drive2Name = deviceName;
-                                deviceInfo.Drive2Capacity = size;
-                                deviceInfo.Drive2Type = "SATA";
-                                deviceInfo.Drive2Model = model;
+                                deviceInfo.drive2_name = deviceName;
+                                deviceInfo.drive2_capacity = size;
+                                deviceInfo.drive2_type = "SATA";
+                                deviceInfo.drive2_model = model;
                                 break;
                             case 2:
-                                deviceInfo.Drive3Name = deviceName;
-                                deviceInfo.Drive3Capacity = size;
-                                deviceInfo.Drive3Type = "SATA";
-                                deviceInfo.Drive3Model = model;
+                                deviceInfo.drive3_name = deviceName;
+                                deviceInfo.drive3_capacity = size;
+                                deviceInfo.drive3_type = "SATA";
+                                deviceInfo.drive3_model = model;
                                 break;
                             case 3:
-                                deviceInfo.Drive4Name = deviceName;
-                                deviceInfo.Drive4Capacity = size;
-                                deviceInfo.Drive4Type = "SATA";
-                                deviceInfo.Drive4Model = model;
+                                deviceInfo.drive4_name = deviceName;
+                                deviceInfo.drive4_capacity = size;
+                                deviceInfo.drive4_type = "SATA";
+                                deviceInfo.drive4_model = model;
                                 break;
                         }
                     }
@@ -419,23 +428,23 @@ public class DeviceInfoService : IDeviceInfoService
                 var versionMatch = Regex.Match(osRelease, @"VERSION=""([^""]+)""");
                 
                 if (prettyNameMatch.Success)
-                    deviceInfo.OsName = prettyNameMatch.Groups[1].Value;
+                    deviceInfo.os_name = prettyNameMatch.Groups[1].Value;
                 if (versionMatch.Success)
-                    deviceInfo.OSVersion = versionMatch.Groups[1].Value;
+                    deviceInfo.os_version = versionMatch.Groups[1].Value;
             }
             
             // Get kernel version
             var unameResult = await ExecuteCommandAsync("uname -r");
             if (!string.IsNullOrEmpty(unameResult))
             {
-                deviceInfo.OSVersion = $"{deviceInfo.OSVersion} (Kernel: {unameResult.Trim()})";
+                deviceInfo.os_version = $"{deviceInfo.os_version} (Kernel: {unameResult.Trim()})";
             }
             
             // Get architecture
             var archResult = await ExecuteCommandAsync("uname -m");
             if (!string.IsNullOrEmpty(archResult))
             {
-                deviceInfo.OsArchitecture = archResult.Trim();
+                deviceInfo.os_architecture = archResult.Trim();
             }
             
             // Try to get install date from filesystem creation time
@@ -444,7 +453,7 @@ public class DeviceInfoService : IDeviceInfoService
                 var statResult = await ExecuteCommandAsync("stat -c %W /");
                 if (!string.IsNullOrEmpty(statResult) && long.TryParse(statResult.Trim(), out long timestamp))
                 {
-                    deviceInfo.OsInstallDate = DateTimeOffset.FromUnixTimeSeconds(timestamp).DateTime;
+                    deviceInfo.os_install_date = DateTimeOffset.FromUnixTimeSeconds(timestamp).DateTime;
                 }
             }
             catch { /* Install date not critical */ }
@@ -459,8 +468,8 @@ public class DeviceInfoService : IDeviceInfoService
     {
         try
         {
-            deviceInfo.BiosVersion = await ReadFileContentAsync("/sys/class/dmi/id/bios_version");
-            deviceInfo.SerialNumber = await ReadFileContentAsync("/sys/class/dmi/id/product_serial");
+            deviceInfo.bios_version = await ReadFileContentAsync("/sys/class/dmi/id/bios_version");
+            deviceInfo.serial_number = await ReadFileContentAsync("/sys/class/dmi/id/product_serial");
         }
         catch (Exception ex)
         {
@@ -536,58 +545,29 @@ public class DeviceInfoService : IDeviceInfoService
     {
         try
         {
-            var networkInterfaces = NetworkInterface.GetAllNetworkInterfaces()
+            // Get all active network interfaces
+            var allInterfaces = NetworkInterface.GetAllNetworkInterfaces()
                 .Where(ni => ni.OperationalStatus == OperationalStatus.Up && 
                             ni.NetworkInterfaceType != NetworkInterfaceType.Loopback)
                 .ToList();
+
+            // Find the primary/preferred interface based on routing table priority
+            var primaryInterface = GetPrimaryNetworkInterface(allInterfaces);
             
-            for (int i = 0; i < Math.Min(networkInterfaces.Count, 4); i++)
+            if (primaryInterface != null)
             {
-                var ni = networkInterfaces[i];
-                var ipProps = ni.GetIPProperties();
-                var ipv4 = ipProps.UnicastAddresses.FirstOrDefault(ua => ua.Address.AddressFamily == AddressFamily.InterNetwork);
-                
-                if (ipv4 != null)
-                {
-                    var ip = ipv4.Address.ToString();
-                    var mac = ni.GetPhysicalAddress().ToString();
-                    var subnet = $"{ipv4.Address}/{ipv4.PrefixLength}";
-                    
-                    if (i == 0)
-                    {
-                        deviceInfo.primary_ip = ip;
-                        deviceInfo.primary_mac = mac;
-                        deviceInfo.primary_subnet = subnet;
-                        
-                        var dnsServers = ipProps.DnsAddresses.Where(dns => dns.AddressFamily == AddressFamily.InterNetwork).ToList();
-                        if (dnsServers.Count > 0) deviceInfo.primary_dns = dnsServers[0].ToString();
-                        if (dnsServers.Count > 1) deviceInfo.secondary_dns = dnsServers[1].ToString();
-                    }
-                    else
-                    {
-                        switch (i)
-                        {
-                            case 1:
-                                deviceInfo.nic2_name = ni.Name;
-                                deviceInfo.nic2_ip = ip;
-                                deviceInfo.nic2_mac = mac;
-                                deviceInfo.nic2_subnet = subnet;
-                                break;
-                            case 2:
-                                deviceInfo.nic3_name = ni.Name;
-                                deviceInfo.nic3_ip = ip;
-                                deviceInfo.nic3_mac = mac;
-                                deviceInfo.nic3_subnet = subnet;
-                                break;
-                            case 3:
-                                deviceInfo.nic4_name = ni.Name;
-                                deviceInfo.nic4_ip = ip;
-                                deviceInfo.nic4_mac = mac;
-                                deviceInfo.nic4_subnet = subnet;
-                                break;
-                        }
-                    }
-                }
+                PopulatePrimaryNicInfo(deviceInfo, primaryInterface);
+            }
+
+            // Populate additional interfaces (excluding the primary one)
+            var additionalInterfaces = allInterfaces
+                .Where(ni => ni.Id != primaryInterface?.Id)
+                .Take(3)
+                .ToList();
+
+            for (int i = 0; i < additionalInterfaces.Count; i++)
+            {
+                PopulateAdditionalNicInfo(deviceInfo, additionalInterfaces[i], i + 2);
             }
         }
         catch (Exception ex)
@@ -595,6 +575,168 @@ public class DeviceInfoService : IDeviceInfoService
             _logger.LogWarning(ex, "Error getting network info");
         }
         return Task.CompletedTask;
+    }
+
+    private NetworkInterface? GetPrimaryNetworkInterface(List<NetworkInterface> interfaces)
+    {
+        // Priority 1: Interface with default gateway and lowest metric
+        var interfacesWithGateway = interfaces
+            .Select(ni => new { Interface = ni, Properties = ni.GetIPProperties() })
+            .Where(x => x.Properties.GatewayAddresses.Any(ga => !IPAddress.IsLoopback(ga.Address)))
+            .ToList();
+
+        if (interfacesWithGateway.Any())
+        {
+            // Prefer Ethernet over Wireless
+            var ethernetWithGateway = interfacesWithGateway
+                .Where(x => x.Interface.NetworkInterfaceType == NetworkInterfaceType.Ethernet ||
+                           x.Interface.NetworkInterfaceType == NetworkInterfaceType.GigabitEthernet)
+                .OrderBy(x => GetInterfaceMetric(x.Interface))
+                .FirstOrDefault();
+
+            if (ethernetWithGateway != null)
+                return ethernetWithGateway.Interface;
+
+            // Fall back to any interface with gateway
+            return interfacesWithGateway
+                .OrderBy(x => GetInterfaceMetric(x.Interface))
+                .First().Interface;
+        }
+
+        // Priority 2: Active Ethernet interface
+        var ethernet = interfaces
+            .Where(ni => ni.NetworkInterfaceType == NetworkInterfaceType.Ethernet ||
+                        ni.NetworkInterfaceType == NetworkInterfaceType.GigabitEthernet)
+            .FirstOrDefault(HasValidIPv4Address);
+
+        if (ethernet != null)
+            return ethernet;
+
+        // Priority 3: Any active interface with valid IPv4
+        return interfaces.FirstOrDefault(HasValidIPv4Address);
+    }
+
+    private bool HasValidIPv4Address(NetworkInterface ni)
+    {
+        var ipProps = ni.GetIPProperties();
+        return ipProps.UnicastAddresses.Any(ua => 
+            ua.Address.AddressFamily == AddressFamily.InterNetwork &&
+            !IPAddress.IsLoopback(ua.Address));
+    }
+
+    private int GetInterfaceMetric(NetworkInterface ni)
+    {
+        try
+        {
+#if WINDOWS
+            // On Windows, try to get the interface metric
+            var ipProps = ni.GetIPProperties();
+            var ipv4Props = ipProps.GetIPv4Properties();
+            return ipv4Props?.Index ?? int.MaxValue;
+#else
+            // On Linux, return 0 for now (could be enhanced to read from /proc/net/route)
+            return 0;
+#endif
+        }
+        catch
+        {
+            return int.MaxValue;
+        }
+    }
+
+    private void PopulatePrimaryNicInfo(DeviceInfo deviceInfo, NetworkInterface ni)
+    {
+        try
+        {
+            var ipProps = ni.GetIPProperties();
+            var ipv4 = ipProps.UnicastAddresses.FirstOrDefault(ua => ua.Address.AddressFamily == AddressFamily.InterNetwork);
+            
+            if (ipv4 != null)
+            {
+                deviceInfo.primary_nic_name = ni.Name;
+                deviceInfo.primary_ip = ipv4.Address.ToString();
+                deviceInfo.primary_mac = FormatMacAddress(ni.GetPhysicalAddress().ToString());
+                deviceInfo.primary_subnet = ConvertPrefixLengthToSubnetMask(ipv4.PrefixLength);
+                
+                // Get DNS servers for primary interface
+                var dnsServers = ipProps.DnsAddresses
+                    .Where(dns => dns.AddressFamily == AddressFamily.InterNetwork)
+                    .ToList();
+                
+                if (dnsServers.Count > 0) 
+                    deviceInfo.primary_dns = dnsServers[0].ToString();
+                if (dnsServers.Count > 1) 
+                    deviceInfo.secondary_dns = dnsServers[1].ToString();
+
+                _logger.LogInformation("Primary NIC detected: {Name} ({Type}) - {IP}", 
+                    ni.Name, ni.NetworkInterfaceType, ipv4.Address);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Error populating primary NIC info for {InterfaceName}", ni.Name);
+        }
+    }
+
+    private void PopulateAdditionalNicInfo(DeviceInfo deviceInfo, NetworkInterface ni, int nicNumber)
+    {
+        try
+        {
+            var ipProps = ni.GetIPProperties();
+            var ipv4 = ipProps.UnicastAddresses.FirstOrDefault(ua => ua.Address.AddressFamily == AddressFamily.InterNetwork);
+            
+            if (ipv4 != null)
+            {
+                var ip = ipv4.Address.ToString();
+                var mac = FormatMacAddress(ni.GetPhysicalAddress().ToString());
+                var subnet = ConvertPrefixLengthToSubnetMask(ipv4.PrefixLength);
+                
+                switch (nicNumber)
+                {
+                    case 2:
+                        deviceInfo.nic2_name = ni.Name;
+                        deviceInfo.nic2_ip = ip;
+                        deviceInfo.nic2_mac = mac;
+                        deviceInfo.nic2_subnet = subnet;
+                        break;
+                    case 3:
+                        deviceInfo.nic3_name = ni.Name;
+                        deviceInfo.nic3_ip = ip;
+                        deviceInfo.nic3_mac = mac;
+                        deviceInfo.nic3_subnet = subnet;
+                        break;
+                    case 4:
+                        deviceInfo.nic4_name = ni.Name;
+                        deviceInfo.nic4_ip = ip;
+                        deviceInfo.nic4_mac = mac;
+                        deviceInfo.nic4_subnet = subnet;
+                        break;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Error populating NIC{Number} info for {InterfaceName}", nicNumber, ni.Name);
+        }
+    }
+
+    private static string FormatMacAddress(string macAddress)
+    {
+        if (string.IsNullOrEmpty(macAddress) || macAddress.Length != 12)
+            return macAddress;
+        
+        // Format as XX:XX:XX:XX:XX:XX
+        return string.Join(":", Enumerable.Range(0, 6)
+            .Select(i => macAddress.Substring(i * 2, 2)));
+    }
+
+    private static string ConvertPrefixLengthToSubnetMask(int prefixLength)
+    {
+        if (prefixLength < 0 || prefixLength > 32)
+            return "255.255.255.255"; // Default fallback
+        
+        uint mask = 0xffffffff << (32 - prefixLength);
+        return $"{(mask >> 24) & 0xff}.{(mask >> 16) & 0xff}.{(mask >> 8) & 0xff}.{mask & 0xff}";
     }
 
 #if WINDOWS

@@ -139,7 +139,7 @@ public class SqlQueryService : ISqlQueryService
     {
         return @"
             UPDATE devices 
-            SET LastDiscovered = @LastDiscovered, UpdatedAt = @UpdatedAt
-            WHERE Hostname = @Hostname";
+            SET last_discovered = @LastDiscovered
+            WHERE hostname = @Hostname";
     }
 }

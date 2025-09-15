@@ -1,4 +1,5 @@
 using DeviceAgent.Services;
+using DeviceAgent.Models;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Configuration;
 
@@ -23,7 +24,14 @@ public class DeviceAgentTest
         {
             // Test device info collection
             var deviceInfoLogger = loggerFactory.CreateLogger<DeviceInfoService>();
-            var deviceInfoService = new DeviceInfoService(deviceInfoLogger);
+            var timeZoneLogger = loggerFactory.CreateLogger<TimeZoneService>();
+            
+            // Create a mock configuration service for timezone
+            var mockConfig = new AppConfiguration { TimeZoneId = "Eastern Standard Time" };
+            var mockConfigService = new MockConfigurationService(mockConfig);
+            var timeZoneService = new TimeZoneService(mockConfigService, timeZoneLogger);
+            
+            var deviceInfoService = new DeviceInfoService(deviceInfoLogger, timeZoneService);
             
             Console.WriteLine("Collecting device information...");
             var deviceInfo = await deviceInfoService.GetCurrentDeviceInfoAsync();
@@ -50,4 +58,20 @@ public class DeviceAgentTest
         Console.WriteLine("Press any key to exit...");
         Console.ReadKey();
     }
+}
+
+public class MockConfigurationService : IConfigurationService
+{
+    private readonly AppConfiguration _config;
+    
+    public MockConfigurationService(AppConfiguration config)
+    {
+        _config = config;
+    }
+
+    public AppConfiguration GetConfiguration() => _config;
+    
+    public Task SaveConfigurationAsync(AppConfiguration config) => Task.CompletedTask;
+    
+    public event EventHandler<AppConfiguration>? ConfigurationChanged;
 }

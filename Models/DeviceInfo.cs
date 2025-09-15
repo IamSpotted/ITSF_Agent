@@ -57,6 +57,7 @@ public class DeviceInfo
     public string? drive4_model { get; set; }
     
     // Primary Network Interface
+    public string? primary_nic_name { get; set; }
     public string? primary_ip { get; set; }
     public string? primary_mac { get; set; }
     public string? primary_subnet { get; set; }

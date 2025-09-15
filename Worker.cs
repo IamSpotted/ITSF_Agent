@@ -6,12 +6,20 @@ public class Worker : BackgroundService
 {
     private readonly ILogger<Worker> _logger;
     private readonly IDeviceSyncService _deviceSyncService;
+    private readonly IConfiguration _configuration;
     private readonly TimeSpan _checkInterval = TimeSpan.FromHours(1); // Check every hour to see if it's time
+    private readonly string _triggerFilePath;
 
-    public Worker(ILogger<Worker> logger, IDeviceSyncService deviceSyncService)
+    public Worker(ILogger<Worker> logger, IDeviceSyncService deviceSyncService, IConfiguration configuration)
     {
         _logger = logger;
         _deviceSyncService = deviceSyncService;
+        _configuration = configuration;
+        
+        // Set up trigger file path (in the same directory as the executable)
+        var exePath = System.Reflection.Assembly.GetExecutingAssembly().Location;
+        var exeDirectory = Path.GetDirectoryName(exePath) ?? Environment.CurrentDirectory;
+        _triggerFilePath = Path.Combine(exeDirectory, "force_sync.trigger");
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -29,6 +37,14 @@ public class Worker : BackgroundService
             {
                 try
                 {
+                    // Check for force sync trigger file
+                    if (CheckForForceSyncTrigger())
+                    {
+                        _logger.LogInformation("Force sync trigger detected, performing immediate sync...");
+                        await _deviceSyncService.SyncDeviceAsync();
+                        continue; // Go to next iteration immediately
+                    }
+
                     // Calculate how long to wait until next check-in
                     var timeUntilNext = await _deviceSyncService.GetTimeUntilNextCheckInAsync();
                     
@@ -87,5 +103,28 @@ public class Worker : BackgroundService
         _logger.LogInformation("Device Agent Worker stop requested.");
         await base.StopAsync(cancellationToken);
         _logger.LogInformation("Device Agent Worker stopped.");
+    }
+
+    private bool CheckForForceSyncTrigger()
+    {
+        try
+        {
+            if (File.Exists(_triggerFilePath))
+            {
+                _logger.LogInformation("Force sync trigger file found at: {TriggerPath}", _triggerFilePath);
+                
+                // Delete the trigger file
+                File.Delete(_triggerFilePath);
+                _logger.LogInformation("Force sync trigger file removed.");
+                
+                return true;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Error checking for force sync trigger file: {TriggerPath}", _triggerFilePath);
+        }
+        
+        return false;
     }
 }

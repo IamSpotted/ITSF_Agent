@@ -5,6 +5,7 @@ namespace DeviceAgent.Services;
 public interface IDeviceSyncService
 {
     Task SyncDeviceAsync();
+    Task ForceSyncAsync();
     Task<TimeSpan> GetTimeUntilNextCheckInAsync();
 }
 
@@ -13,19 +14,27 @@ public class DeviceSyncService : IDeviceSyncService
     private readonly IDeviceInfoService _deviceInfoService;
     private readonly IDatabaseService _databaseService;
     private readonly ILocalStateService _localStateService;
+    private readonly IConfigurationService _configService;
     private readonly ILogger<DeviceSyncService> _logger;
-    private readonly TimeSpan _checkInInterval = TimeSpan.FromDays(7); // 7 days between check-ins
 
     public DeviceSyncService(
         IDeviceInfoService deviceInfoService,
         IDatabaseService databaseService,
         ILocalStateService localStateService,
+        IConfigurationService configService,
         ILogger<DeviceSyncService> logger)
     {
         _deviceInfoService = deviceInfoService;
         _databaseService = databaseService;
         _localStateService = localStateService;
+        _configService = configService;
         _logger = logger;
+    }
+
+    private TimeSpan GetCheckInInterval()
+    {
+        var config = _configService.GetConfiguration();
+        return TimeSpan.FromDays(config.CheckInIntervalDays);
     }
 
     public async Task SyncDeviceAsync()
@@ -46,16 +55,17 @@ public class DeviceSyncService : IDeviceSyncService
             else
             {
                 var timeSinceLastCheckIn = DateTime.UtcNow - lastCheckIn!.Value;
+                var checkInInterval = GetCheckInInterval();
                 _logger.LogInformation("Last check-in was {TimeSinceLastCheckIn} ago", timeSinceLastCheckIn);
 
-                if (timeSinceLastCheckIn >= _checkInInterval)
+                if (timeSinceLastCheckIn >= checkInInterval)
                 {
-                    _logger.LogInformation("Check-in interval exceeded ({Interval}), performing sync", _checkInInterval);
+                    _logger.LogInformation("Check-in interval exceeded ({Interval}), performing sync", checkInInterval);
                     await PerformFullSyncAsync(isFirstRun: false);
                 }
                 else
                 {
-                    var timeUntilNext = _checkInInterval - timeSinceLastCheckIn;
+                    var timeUntilNext = checkInInterval - timeSinceLastCheckIn;
                     _logger.LogInformation("Check-in not due yet. Next check-in in: {TimeUntilNext}", timeUntilNext);
                     return; // Exit without doing anything
                 }
@@ -66,6 +76,24 @@ public class DeviceSyncService : IDeviceSyncService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error during device sync process");
+            throw;
+        }
+    }
+
+    public async Task ForceSyncAsync()
+    {
+        try
+        {
+            _logger.LogInformation("Starting FORCED device sync process (bypassing interval check)...");
+            
+            // Always perform full sync for force update, regardless of timing
+            await PerformFullSyncAsync(isFirstRun: false);
+            
+            _logger.LogInformation("Forced device sync process completed successfully");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error during forced device sync process");
             throw;
         }
     }
@@ -87,12 +115,13 @@ public class DeviceSyncService : IDeviceSyncService
             }
 
             var timeSinceLastCheckIn = DateTime.UtcNow - lastCheckIn.Value;
-            if (timeSinceLastCheckIn >= _checkInInterval)
+            var checkInInterval = GetCheckInInterval();
+            if (timeSinceLastCheckIn >= checkInInterval)
             {
                 return TimeSpan.Zero; // Should check in immediately
             }
 
-            var timeUntilNext = _checkInInterval - timeSinceLastCheckIn;
+            var timeUntilNext = checkInInterval - timeSinceLastCheckIn;
             return timeUntilNext;
         }
         catch (Exception ex)
@@ -106,6 +135,15 @@ public class DeviceSyncService : IDeviceSyncService
     {
         try
         {
+            // Test database connection first
+            _logger.LogInformation("Testing database connection before sync...");
+            var connectionTest = await _databaseService.TestConnectionAsync();
+            if (!connectionTest)
+            {
+                throw new InvalidOperationException("Database connection test failed. Please check your connection string and database availability.");
+            }
+            _logger.LogInformation("Database connection test passed");
+
             // Get current device information
             var currentDeviceInfo = await _deviceInfoService.GetCurrentDeviceInfoAsync();
             _logger.LogInformation("Collected current device info for hostname: {Hostname}", currentDeviceInfo.hostname);
@@ -179,13 +217,14 @@ public class DeviceSyncService : IDeviceSyncService
                 }
             }
 
+            var checkInInterval = GetCheckInInterval();
             if (isFirstRun)
             {
-                _logger.LogInformation("Initial check-in completed successfully. Next check-in scheduled in {Interval}", _checkInInterval);
+                _logger.LogInformation("Initial check-in completed successfully. Next check-in scheduled in {Interval}", checkInInterval);
             }
             else
             {
-                _logger.LogInformation("Scheduled check-in completed successfully. Next check-in scheduled in {Interval}", _checkInInterval);
+                _logger.LogInformation("Scheduled check-in completed successfully. Next check-in scheduled in {Interval}", checkInInterval);
             }
         }
         catch (Exception ex)

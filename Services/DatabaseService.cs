@@ -7,33 +7,52 @@ namespace DeviceAgent.Services;
 public interface IDatabaseService
 {
     Task<DeviceInfo?> GetDeviceByHostnameAsync(string hostname);
-    Task<bool> UpdateDeviceAsync(DeviceInfo deviceInfo);
     Task<bool> InsertDeviceAsync(DeviceInfo deviceInfo);
+    Task<bool> UpdateDeviceAsync(DeviceInfo deviceInfo);
     Task<bool> UpdateLastDiscoveredAsync(string hostname);
+    Task<bool> TestConnectionAsync();
 }
 
 public class DatabaseService : IDatabaseService
 {
-    private readonly string _connectionString;
+    private readonly IConfigurationService _configService;
     private readonly ILogger<DatabaseService> _logger;
     private readonly ISqlQueryService _sqlQueryService;
 
-    public DatabaseService(IConfiguration configuration, ILogger<DatabaseService> logger, ISqlQueryService sqlQueryService)
+    public DatabaseService(IConfigurationService configService, ILogger<DatabaseService> logger, ISqlQueryService sqlQueryService)
     {
-        _connectionString = configuration.GetConnectionString("DefaultConnection") 
-            ?? throw new InvalidOperationException("Connection string 'DefaultConnection' not found.");
+        _configService = configService;
         _logger = logger;
         _sqlQueryService = sqlQueryService;
+    }
+
+    private string GetConnectionString()
+    {
+        var config = _configService.GetConfiguration();
+        if (string.IsNullOrEmpty(config.ConnectionString))
+        {
+            _logger.LogError("Database connection string is not configured");
+            throw new InvalidOperationException("Database connection string is not configured. Please configure it through the GUI or configuration file.");
+        }
+        
+        _logger.LogDebug("Using connection string: {ConnectionString}", 
+            config.ConnectionString.Replace("Password=", "Password=***").Replace("pwd=", "pwd=***"));
+        
+        return config.ConnectionString;
     }
 
     public async Task<DeviceInfo?> GetDeviceByHostnameAsync(string hostname)
     {
         try
         {
-            using var connection = new SqlConnection(_connectionString);
+            _logger.LogDebug("Attempting to retrieve device by hostname: {Hostname}", hostname);
+            
+            using var connection = new SqlConnection(GetConnectionString());
             await connection.OpenAsync();
+            _logger.LogDebug("Database connection opened successfully");
 
             var query = _sqlQueryService.GetDeviceByHostnameQuery();
+            _logger.LogDebug("Executing query: {Query}", query);
 
             using var command = new SqlCommand(query, connection);
             command.Parameters.AddWithValue("@hostname", hostname);
@@ -42,9 +61,11 @@ public class DatabaseService : IDatabaseService
             
             if (await reader.ReadAsync())
             {
+                _logger.LogDebug("Device found in database for hostname: {Hostname}", hostname);
                 return MapReaderToDeviceInfo(reader);
             }
             
+            _logger.LogDebug("No device found in database for hostname: {Hostname}", hostname);
             return null;
         }
         catch (Exception ex)
@@ -58,7 +79,7 @@ public class DatabaseService : IDatabaseService
     {
         try
         {
-            using var connection = new SqlConnection(_connectionString);
+            using var connection = new SqlConnection(GetConnectionString());
             await connection.OpenAsync();
 
             var query = _sqlQueryService.GetUpdateDeviceQuery();
@@ -80,10 +101,14 @@ public class DatabaseService : IDatabaseService
     {
         try
         {
-            using var connection = new SqlConnection(_connectionString);
+            _logger.LogInformation("Attempting to insert new device: {Hostname}", deviceInfo.hostname);
+            
+            using var connection = new SqlConnection(GetConnectionString());
             await connection.OpenAsync();
+            _logger.LogDebug("Database connection opened for device insert");
 
             var query = _sqlQueryService.GetInsertDeviceQuery();
+            _logger.LogDebug("Executing insert query for device: {Hostname}", deviceInfo.hostname);
 
             using var command = new SqlCommand(query, connection);
             deviceInfo.created_at = DateTime.UtcNow;
@@ -91,6 +116,18 @@ public class DatabaseService : IDatabaseService
             command.Parameters.AddWithValue("@CreatedAt", deviceInfo.created_at);
 
             var rowsAffected = await command.ExecuteNonQueryAsync();
+            
+            if (rowsAffected > 0)
+            {
+                _logger.LogInformation("Successfully inserted device: {Hostname} ({RowsAffected} rows affected)", 
+                    deviceInfo.hostname, rowsAffected);
+            }
+            else
+            {
+                _logger.LogWarning("Device insert returned 0 rows affected for hostname: {Hostname}", 
+                    deviceInfo.hostname);
+            }
+            
             return rowsAffected > 0;
         }
         catch (Exception ex)
@@ -104,7 +141,7 @@ public class DatabaseService : IDatabaseService
     {
         try
         {
-            using var connection = new SqlConnection(_connectionString);
+            using var connection = new SqlConnection(GetConnectionString());
             await connection.OpenAsync();
 
             var query = _sqlQueryService.GetUpdateLastDiscoveredQuery();
@@ -112,7 +149,6 @@ public class DatabaseService : IDatabaseService
             using var command = new SqlCommand(query, connection);
             command.Parameters.AddWithValue("@Hostname", hostname);
             command.Parameters.AddWithValue("@LastDiscovered", DateTime.UtcNow);
-            command.Parameters.AddWithValue("@UpdatedAt", DateTime.UtcNow);
 
             var rowsAffected = await command.ExecuteNonQueryAsync();
             return rowsAffected > 0;
@@ -121,6 +157,29 @@ public class DatabaseService : IDatabaseService
         {
             _logger.LogError(ex, "Error updating last discovered for device: {Hostname}", hostname);
             throw;
+        }
+    }
+
+    public async Task<bool> TestConnectionAsync()
+    {
+        try
+        {
+            _logger.LogInformation("Testing database connection...");
+            
+            using var connection = new SqlConnection(GetConnectionString());
+            await connection.OpenAsync();
+            
+            // Simple test query
+            using var command = new SqlCommand("SELECT 1", connection);
+            var result = await command.ExecuteScalarAsync();
+            
+            _logger.LogInformation("Database connection test successful");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Database connection test failed");
+            return false;
         }
     }
 
