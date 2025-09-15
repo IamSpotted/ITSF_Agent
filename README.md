@@ -470,10 +470,11 @@ sudo journalctl -u deviceagent -f
 This project is licensed under the GPL 2.0 License.
 
 ## Version
-Current Version: 2.0.0 (September 2025)
+Current Version: 1.0.0 (September 2025)
 - Enhanced network detection
 - Force update fixes
 - Timezone support
 
 - Security improvements
+
 
